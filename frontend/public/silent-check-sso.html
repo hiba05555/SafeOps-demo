@@ -1,0 +1,9 @@
+<!doctype html>
+<html>
+  <body>
+    <!-- Used by keycloak-js to silently check if the user is already logged in (in a hidden iframe). -->
+    <script>
+      parent.postMessage(location.href, location.origin);
+    </script>
+  </body>
+</html>

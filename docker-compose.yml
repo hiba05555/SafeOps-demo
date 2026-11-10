@@ -1,0 +1,116 @@
+# Tiko MVP:  docker compose up --build   ->  http://localhost:3000
+#
+#   keycloak       identity provider (dev mode, state kept in a volume)
+#   keycloak-init  one-shot: realm, clients, roles, users; writes the gateway's client secret
+#   postgres       queue-service database
+#   queue-service  establishments / queues / tickets (no published port: gateway only)
+#   api-gateway    verifies the JWT, forwards /api/** with X-Auth-* identity headers
+#   frontend       React build behind nginx, /api proxied to the gateway
+
+name: tiko
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    command: start-dev
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      # one public issuer for every caller: the browser (localhost) and the containers
+      # (keycloak:8080) all get tokens with iss=http://localhost:${KEYCLOAK_PORT}/realms/tiko
+      KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_PORT}:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+    healthcheck:
+      # the image has no curl: plain bash over /dev/tcp to the management port
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q UP <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  keycloak-init:
+    image: quay.io/keycloak/keycloak:26.4
+    entrypoint: ["/bin/bash", "/bootstrap.sh"]
+    # root only to chown the secret file to the gateway's uid on the shared volume
+    user: "0:0"
+    environment:
+      KC_URL: http://keycloak:8080
+      KC_ADMIN: ${KC_ADMIN}
+      KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      FRONTEND_ORIGINS: http://localhost:${FRONTEND_PORT},http://localhost:5173
+      TIKO_CLIENT_PASSWORD: ${TIKO_CLIENT_PASSWORD}
+      TIKO_AGENT_PASSWORD: ${TIKO_AGENT_PASSWORD}
+      TIKO_ADMIN_PASSWORD: ${TIKO_ADMIN_PASSWORD}
+    volumes:
+      - ./keycloak/bootstrap.sh:/bootstrap.sh:ro
+      - gateway-secrets:/bootstrap
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    restart: "no"
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: tiko
+      POSTGRES_USER: tiko
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tiko -d tiko"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  queue-service:
+    build: ./backend/queue-service
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tiko
+      SPRING_DATASOURCE_USERNAME: tiko
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-gateway:
+    build: ./backend/api-gateway
+    environment:
+      PROVIDER_URL: http://keycloak:8080
+      PROVIDER_JWT_ISSUER: http://localhost:${KEYCLOAK_PORT}/realms/tiko
+      PROVIDER_SELF_TEST: "true"
+      QUEUE_SERVICE_URL: http://queue-service:8081
+      # client id + secret written by keycloak-init
+      SPRING_CONFIG_IMPORT: optional:file:/bootstrap/gateway.properties
+    volumes:
+      - gateway-secrets:/bootstrap:ro
+    ports:
+      - "${GATEWAY_PORT}:8888"
+    depends_on:
+      keycloak-init:
+        condition: service_completed_successfully
+      queue-service:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_KEYCLOAK_URL: http://localhost:${KEYCLOAK_PORT}
+        VITE_KEYCLOAK_REALM: tiko
+        VITE_KEYCLOAK_CLIENT_ID: frontend
+    ports:
+      - "${FRONTEND_PORT}:8080"
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+
+volumes:
+  keycloak-data:
+  postgres-data:
+  gateway-secrets:
