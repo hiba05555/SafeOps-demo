@@ -16,6 +16,33 @@ export type Ticket = {
   ownerName: string; position: number; estimatedWaitMinutes: number; createdAt: string; calledAt: string | null;
 };
 export type Counter = { queue: Queue; current: Ticket | null; waiting: Ticket[] };
+export type AppointmentStatus = 'BOOKED' | 'CANCELLED' | 'COMPLETED' | 'NO_SHOW';
+export type Appointment = {
+  id: string;
+  ownerSubject: string;
+  establishmentId: string;
+  queueId: number;
+  startsAt: string;
+  reason: string;
+  status: AppointmentStatus;
+  createdAt: string;
+};
+export type Preferences = {
+  subject: string;
+  sms: boolean;
+  email: boolean;
+  appointmentReminder: boolean;
+  language: string;
+};
+export type NotificationType = 'TURN_APPROACHING' | 'APPOINTMENT_REMINDER';
+export type Notification = {
+  id: string;
+  subject: string;
+  type: NotificationType;
+  message: string;
+  read: boolean;
+  createdAt: string;
+};
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -33,14 +60,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => null);
+    const body = await res.json().catch(() => null) as { message?: string; error?: string } | null;
     throw new ApiError(res.status, body?.message || body?.error || res.statusText);
   }
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+const put = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: 'PUT', body: JSON.stringify(body) });
 
 export const api = {
   establishments: () => request<Establishment[]>('/establishments'),
@@ -53,6 +83,14 @@ export const api = {
   callNext: (queueId: number) => post<Counter>(`/queues/${queueId}/call-next`),
   served: (ticketId: string) => post<Counter>(`/tickets/${encodeURIComponent(ticketId)}/served`),
   noShow: (ticketId: string) => post<Counter>(`/tickets/${encodeURIComponent(ticketId)}/no-show`),
+  appointments: () => request<Appointment[]>('/appointments/me'),
+  createAppointment: (input: Pick<Appointment, 'establishmentId' | 'queueId' | 'startsAt' | 'reason'>) =>
+    post<Appointment>('/appointments', input),
+  cancelAppointment: (id: string) => post<Appointment>(`/appointments/${encodeURIComponent(id)}/cancel`),
+  preferences: () => request<Preferences>('/profile/preferences'),
+  updatePreferences: (input: Omit<Preferences, 'subject'>) => put<Preferences>('/profile/preferences', input),
+  notifications: () => request<Notification[]>('/notifications'),
+  markNotificationRead: (id: string) => post<Notification>(`/notifications/${encodeURIComponent(id)}/read`),
 };
 
 /** "position 1" -> "1er", 2 -> "2e" */
