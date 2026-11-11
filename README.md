@@ -1,57 +1,111 @@
-# Tiko — MVP
+# Tiko
 
+Tiko is a local development stack for queues, appointments, and profile notifications. All
+business APIs are authenticated at the gateway; backend services accept the gateway's verified
+`X-Auth-*` headers and are not published to the host in the default configuration.
+
+```text
+                         ┌────────────── edge network ────────────────┐
+browser ──► frontend :3000 ──/api──► api-gateway :8888                │
+   │                                    │                             │
+   │                                    ├── queue-service :8081 ─────┐│
+   │                                    ├── appointment-service :8082┤│
+   │                                    └── profile-notification :8083
+   │                                                                  │
+   └──────────────► Keycloak :8080 ◄─────────────────────────────────┘
+                                        backend network
+                                                   │
+                                           PostgreSQL :5432
+                                      ┌────────────┼─────────────┐
+                                      tiko     appointments    profiles
 ```
-browser ──► frontend (nginx :3000) ──/api──► api-gateway (:8888) ──► queue-service ──► postgres
-   │                                             │ verifies JWT (JWKS, iss, aud=tiko-api)
-   └──── Keycloak (:8080) ◄── PKCE login         └ forwards X-Auth-* identity headers
+
+The browser uses Keycloak Authorization Code + PKCE. The gateway validates tokens and forwards
+the identity headers to backend services. The shared PostgreSQL container creates separate
+databases and login roles for the queue, appointment, and profile-notification services.
+
+## Run locally
+
+1. Copy `.env.example` to `.env` and replace every `replace-with-...` value with a unique
+   development credential.
+2. Start the stack:
+
+   ```sh
+   docker compose up --build
+   ```
+
+3. Open http://localhost:3000. The Keycloak console is at http://localhost:8080/admin; its
+   credentials are `KC_ADMIN` and `KC_ADMIN_PASSWORD` from `.env`. Test accounts are `client`,
+   `agent`, and `admin`; their passwords are the corresponding `TIKO_*_PASSWORD` values.
+
+Only the frontend, gateway, and Keycloak are published by default, bound to loopback. PostgreSQL
+and business-service ports are internal to the backend network. To publish those ports for local
+debugging, use the additional override file:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.debug.yml up --build
 ```
 
-## Run
+The debug ports are loopback-only and configured by the `*_DEBUG_PORT` variables in `.env`.
+`docker compose down` stops the stack. `docker compose down -v` also deletes Keycloak, PostgreSQL,
+and gateway-secret volumes.
 
-```bash
-cp .env.example .env      # then change the passwords
-docker compose up --build
-```
+PostgreSQL's `db/init.sh` runs only when the data volume is initialized for the first time. If
+database names, users, or passwords change later, update the existing database roles manually or
+remove the PostgreSQL volume and recreate it; removing that volume deletes all service data.
 
-Open http://localhost:3000. Test accounts are `client`, `agent`, and `admin`. Their passwords are the `TIKO_*_PASSWORD` values in `.env`. Self-registration is on, and new users get the `client` role.
+## API
 
-| URL | What |
-|---|---|
-| http://localhost:3000 | app (client screens: `/search`, `/tickets`; counter: `/tenant` → Guichet, as `agent`) |
-| http://localhost:8080/admin | Keycloak console (`KC_ADMIN` / `KC_ADMIN_PASSWORD`) |
-| http://localhost:8888 | api-gateway (`/api/**`, `/auth/me`, `/actuator/health`) |
+All API paths below are served by the gateway and require a valid bearer token. Client routes are
+owner-scoped; staff-only routes require the `agent` or `admin` realm role.
 
-Start from scratch (wipes Keycloak and the database): `docker compose down -v`.
-
-## Keycloak reproducibility
-
-Nothing in Keycloak is configured by hand. `keycloak/bootstrap.sh` runs in the one-shot `keycloak-init` container on every `up` and converges Keycloak to:
-
-- realm `tiko`, with realm roles `client` / `agent` / `admin` (`client` is the default)
-- client `frontend`: public, Authorization Code + PKCE S256 only, redirect URIs for :3000 and :5173
-- client `tiko-backend`: confidential, with a service account (the gateway's own client)
-- an audience mapper that puts `tiko-api` in both clients' access tokens; the gateway rejects any other audience
-- the test users
-
-It then reads `tiko-backend`'s **generated** secret from Keycloak and writes it to the `gateway-secrets` volume (`gateway.properties`, mode 0400, owned by the gateway's uid). The gateway loads that file with `SPRING_CONFIG_IMPORT`. No secret is in git, in an image, or in `docker-compose.yml`. With `PROVIDER_SELF_TEST=true`, the gateway logs at startup whether that secret yields a valid token.
-
-The script is idempotent, so you can re-run it any time with `docker compose run --rm keycloak-init`.
-
-`KC_HOSTNAME` pins the issuer to `http://localhost:8080`, so tokens from the browser and from containers (which reach Keycloak as `keycloak:8080`) share one `iss`. The gateway sets `PROVIDER_JWT_ISSUER` to match.
-
-## queue-service API (all behind the gateway, token required)
-
-| Method | Path | Who |
+| Method | Path | Access |
 |---|---|---|
-| GET | `/api/establishments`, `/api/establishments/{id}` | any user |
-| POST | `/api/tickets` `{queueId}` | any user (one active ticket per queue) |
-| GET | `/api/tickets/me`, `/api/tickets/{id}` | owner |
-| POST | `/api/tickets/{id}/cancel` | owner |
-| GET | `/api/queues/{id}/counter` | agent / admin |
-| POST | `/api/queues/{id}/call-next`, `/api/tickets/{id}/served`, `/api/tickets/{id}/no-show` | agent / admin |
+| GET | `/api/establishments`, `/api/establishments/{id}` | Any authenticated user |
+| POST | `/api/tickets` | Any authenticated user |
+| GET | `/api/tickets/me`, `/api/tickets/{id}` | Ticket owner |
+| POST | `/api/tickets/{id}/cancel` | Ticket owner |
+| GET | `/api/queues/{id}/counter` | Agent / admin |
+| POST | `/api/queues/{id}/call-next` | Agent / admin |
+| POST | `/api/tickets/{id}/served`, `/api/tickets/{id}/no-show` | Agent / admin |
+| POST | `/api/appointments` | Any authenticated user |
+| GET | `/api/appointments/me`, `/api/appointments/{id}` | Appointment owner |
+| POST | `/api/appointments/{id}/cancel` | Appointment owner |
+| GET | `/api/appointments?establishmentId=...` | Agent / admin |
+| POST | `/api/appointments/{id}/complete`, `/api/appointments/{id}/no-show` | Agent / admin |
+| GET / PUT | `/api/profile/preferences` | Current user |
+| GET | `/api/notifications` | Current user |
+| POST | `/api/notifications/{id}/read` | Notification owner |
+| POST | `/api/notifications` | Agent / admin |
 
-The queue-service publishes no port. It trusts `X-Auth-*` only because the gateway is the only way in, and the gateway overwrites any `X-Auth-*` header a client sends.
+The queue, appointment, and profile-notification services use separate PostgreSQL databases.
+They currently use Hibernate `ddl-auto=update` for the MVP; use Flyway-managed migrations before
+production. Notification creation stores notifications; delivery through SMS or email is not
+implemented by this API.
 
-## Local dev without Docker for the frontend
+## Keycloak setup
 
-With the stack running, run `cd frontend && npm run dev` (http://localhost:5173). Vite proxies `/api` to the gateway on :8888.
+`keycloak/bootstrap.sh` runs in the one-shot `keycloak-init` container after Keycloak is healthy.
+It converges the `tiko` realm, clients, roles, test users, and audience mapper, then writes the
+generated gateway client secret to the `gateway-secrets` volume. The secret is not stored in the
+repository or Compose file. `PROVIDER_SELF_TEST=true` makes the gateway log whether its
+client-credentials token check succeeds.
+
+The bootstrap script is safe to rerun:
+
+```sh
+docker compose run --rm keycloak-init
+```
+
+Self-registration is enabled; newly registered users receive the `client` role.
+
+## Frontend development server
+
+With the stack running, start Vite from the frontend directory:
+
+```sh
+cd frontend
+npm run dev
+```
+
+Open http://localhost:5173. Vite proxies `/api` requests to the gateway on port 8888.
