@@ -13,8 +13,8 @@ smoke environment. Deployments to a real cluster are gated by a manual productio
 | Container build and cache | Buildx builds the five runtime images without publishing on CI; GitHub Actions cache stores Maven, npm, and BuildKit layers. | Docker Buildx builds the same five images; Maven, npm, and local BuildKit caches are cached by ref/service. |
 | Image scanning | Trivy scans locally built images for unfixed CRITICAL/HIGH OS and library vulnerabilities. | Trivy scans locally built images for unfixed CRITICAL/HIGH OS and library vulnerabilities. |
 | Kubernetes verification | `kubectl kustomize` output is checked with kubeconform; a kind job builds/loads images, applies manifests with ephemeral test credentials, waits for bootstrap and Deployments. | Equivalent kubeconform and kind smoke jobs in the `scan` stage. |
-| `develop` | CD publishes `dev-<sha>` image tags. | Build stage pushes `dev-<sha>` to the GitLab Container Registry. |
-| `main` | CD publishes `<sha>` and `latest`, then waits for approval in the GitHub `production` Environment before rollout. | Build stage pushes `<sha>` and `latest`; the `deploy-production` job is manual and uses the protected `production` environment. |
+| `develop` | After the CI workflow succeeds, CD publishes `dev-<sha>` image tags. | Build stage pushes `dev-<sha>` to the GitLab Container Registry. |
+| `main` | After the CI workflow succeeds, CD publishes `<sha>` and `latest`, then waits for approval in the GitHub `production` Environment before rollout. | Build stage pushes `<sha>` and `latest`; the `deploy-production` job is manual and uses the protected `production` environment. |
 | Manual publishing/deployment | `workflow_dispatch` builds/publishes the selected ref; production deployment runs only when dispatched on `main`. | Pushes to `main` expose the manual production deployment job. |
 
 ## Required GitHub settings
