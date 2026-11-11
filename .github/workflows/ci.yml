@@ -24,8 +24,8 @@ jobs:
           - appointment-service
           - profile-notification-service
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
           java-version: "21"
@@ -38,8 +38,8 @@ jobs:
     name: Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
@@ -50,6 +50,39 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
+
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Scan Git history for secrets
+        run: docker run --rm --user "$(id -u):$(id -g)" -v "$GITHUB_WORKSPACE:/repo:ro" ghcr.io/gitleaks/gitleaks@sha256:a157fcc2219f2440861b7541aa125f708fedcb0f1777f390806ffab45538d422 git /repo --redact --no-banner
+
+  hadolint:
+    name: Hadolint / Dockerfiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Lint Dockerfiles
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" hadolint/hadolint@sha256:30a8fd2e785ab6176eed53f74769e04f125afb2f74a6c52aef7d463583b6d45e /bin/hadolint /repo/backend/api-gateway/Dockerfile /repo/backend/queue-service/Dockerfile /repo/backend/appointment-service/Dockerfile /repo/backend/profile-notification-service/Dockerfile /repo/frontend/Dockerfile
+
+  trivy-fs:
+    name: Trivy / filesystem
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Scan filesystem for HIGH and CRITICAL findings
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
 
   docker:
     name: Docker build and Trivy / ${{ matrix.image }}
@@ -69,10 +102,10 @@ jobs:
           - image: frontend
             context: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Build without publishing
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
           push: false
@@ -85,21 +118,22 @@ jobs:
             VITE_KEYCLOAK_REALM=tiko
             VITE_KEYCLOAK_CLIENT_ID=frontend
       - name: Scan image
-        uses: aquasecurity/trivy-action@v0.29.0
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
         with:
+          scan-type: image
           image-ref: tiko/${{ matrix.image }}:ci
           format: table
           vuln-type: os,library
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
           exit-code: "1"
 
   kubeconform:
     name: Validate Kubernetes manifests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-kubectl@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: azure/setup-kubectl@3e0aec4d80787158d308d7b364cb1b702e7feb7f # v4.0.0
         with:
           version: v1.32.0
       - name: Validate rendered Kustomize resources
@@ -111,10 +145,13 @@ jobs:
     needs:
       - backend
       - frontend
+      - gitleaks
+      - hadolint
+      - trivy-fs
       - kubeconform
     steps:
-      - uses: actions/checkout@v4
-      - uses: helm/kind-action@v1.10.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: helm/kind-action@0025e74a8c7512023d06dc019c617aa3cf561fde # v1.10.0
         with:
           cluster_name: tiko
           node_image: kindest/node:v1.32.0
