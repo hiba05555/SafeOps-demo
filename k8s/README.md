@@ -40,12 +40,12 @@ requiring the Keycloak container to run `kubectl` or grant the Job API permissio
    docker build -t tiko/api-gateway:local ./backend/api-gateway
    docker build --build-arg VITE_KEYCLOAK_URL=http://keycloak.tiko.local \
      --build-arg VITE_KEYCLOAK_REALM=tiko --build-arg VITE_KEYCLOAK_CLIENT_ID=frontend \
-     -t tiko/frontend:local ./frontend
+     -t tiko/frontend:mvp ./frontend
    minikube image load tiko/queue-service:local
    minikube image load tiko/appointment-service:local
    minikube image load tiko/profile-notification-service:local
    minikube image load tiko/api-gateway:local
-   minikube image load tiko/frontend:local
+   minikube image load tiko/frontend:mvp
    ```
 
 4. Add local host mappings. Point both names at Minikube's IP (or use the ingress IP after
@@ -79,7 +79,7 @@ Build the same five images above, then load them:
 ```sh
 kind create cluster --name tiko
 kind load docker-image --name tiko tiko/queue-service:local tiko/appointment-service:local \
-  tiko/profile-notification-service:local tiko/api-gateway:local tiko/frontend:local
+  tiko/profile-notification-service:local tiko/api-gateway:local tiko/frontend:mvp
 kubectl apply -k k8s/
 kubectl wait --for=condition=complete job/keycloak-bootstrap -n tiko --timeout=5m
 kubectl wait --for=condition=available deployment --all -n tiko --timeout=8m

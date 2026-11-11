@@ -2,7 +2,7 @@ import './tiko.css';
 import './workspace.css';
 import { useEffect, useState } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
-import { RequireAuth, useAuth } from './auth';
+import { RequireAuth, RequireStaff, useAuth } from './auth';
 import { api, ApiError, ordinal, type Appointment as Appt, type Counter, type Establishment as Est, type Notification as UserNotification, type Preferences as UserPreferences, type Ticket as Tk } from './api';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUpRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Clock3, FileText, Globe2, LayoutDashboard, LifeBuoy, List, LockKeyhole, LogOut, MapPin, Menu, MoreHorizontal, Plus, Search, Settings2, ShieldCheck, Smartphone, Sparkles, Ticket, Users, X, Building2, Activity, TrendingUp, Zap, BarChart3, UserRound, ChevronUp, RotateCcw, Eye, SlidersHorizontal } from 'lucide-react';
 
@@ -39,8 +39,8 @@ const localDateValue=(date:Date)=>{const year=date.getFullYear();const month=Str
 const appointmentDate=(value:string)=>new Date(value).toLocaleString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
 const errorText=(e:unknown)=>e instanceof ApiError&&e.status===409?'Vous avez déjà un ticket dans cette file.':e instanceof ApiError&&e.status===403?"Votre compte n'a pas le rôle agent.":e instanceof Error?e.message:'Erreur inattendue';
 
-function Button({children,onClick,kind='dark',className='',type='button'}:{children:React.ReactNode;onClick?:()=>void;kind?:'dark'|'light'|'teal'|'plain';className?:string;type?:'button'|'submit'}) {
-  return <button type={type} onClick={onClick} className={`${kind==='dark'?'btn-dark':kind==='light'?'btn-light':kind==='teal'?'btn-teal':'plain-button'} ${className}`} data-testid="button-action">{children}</button>;
+function Button({children,onClick,kind='dark',className='',type='button',disabled=false}:{children:React.ReactNode;onClick?:()=>void;kind?:'dark'|'light'|'teal'|'plain';className?:string;type?:'button'|'submit';disabled?:boolean}) {
+  return <button type={type} onClick={onClick} className={`${kind==='dark'?'btn-dark':kind==='light'?'btn-light':kind==='teal'?'btn-teal':'plain-button'} ${className}`} disabled={disabled} data-testid="button-action">{children}</button>;
 }
 function Brand({dark=false}:{dark?:boolean}) { return <Link href="/" className="brand" data-testid="link-home"><span className="brand-mark"><i/><i/><i/><i/></span><span style={{fontWeight:800,letterSpacing:'-.06em',fontSize:22,color:dark?'#f6faf8':'#122235'}}>tiko<span style={{color:'#1fa38a'}}>.</span></span></Link> }
 function Pill({children,tone='green'}:{children:React.ReactNode;tone?:'green'|'amber'|'red'|'gray'|'white'}) { const colors={green:['#e6f6ee','#258466'],amber:['#fff2dc','#ad6c12'],red:['#fff0ee','#cb5147'],gray:['#edf1ef','#6c7973'],white:['rgba(255,255,255,.12)','#dce8e2']};return <span className="status-pill" style={{background:colors[tone][0],color:colors[tone][1]}}>{children}</span> }
@@ -161,7 +161,7 @@ function Guichet({tenant}:{tenant:Tenant}) {
  {err&&<div className="offline-alert"><Activity size={17}/><div><b>Action impossible</b><span>{err}</span></div></div>}
  {!open?<div className="empty-counter"><div className="counter-empty-icon"><Ticket size={26}/></div><h2>Votre guichet est fermé</h2><p>Ouvrez le guichet pour commencer à appeler les personnes en attente.</p></div>:<div className="counter-grid"><section className="current-customer soft-card"><div className="counter-section-head"><div><div className="label">EN SERVICE</div><h2>Ticket actuel</h2></div><span className="live-badge"><i/> EN DIRECT</span></div>{cur?<div className="customer-current"><div className="customer-id"><small>NUMÉRO DE TICKET</small><b>{cur.code}</b></div><div className="current-name"><span className="profile-avatar mini">{cur.ownerName.slice(0,2).toUpperCase()}</span><span><b>{cur.ownerName}</b><small>{cur.queueName}</small></span><Pill>Appelé</Pill></div><div className="wait-info"><span><Clock3 size={15}/> Appelé à {cur.calledAt?new Date(cur.calledAt).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}):'—'}</span><span><MapPin size={15}/> {cur.establishmentName}</span></div><div className="action-row"><Button kind="teal" onClick={callNext}><ArrowRight size={16}/> Appeler le suivant</Button><button className="outline-action" onClick={()=>run(api.served(cur.id))}><Check size={16}/> Servi</button><button className="outline-action" onClick={()=>run(api.noShow(cur.id))}>Absent</button></div></div>:<div className="counter-empty small-empty"><CheckCircle2 size={24}/><h3>Personne au guichet</h3><p>{next?`Le ticket ${next.code} est prêt à être appelé.`:'Aucune personne en attente.'}</p>{next&&<Button kind="teal" onClick={callNext}>Appeler {next.code} <ArrowRight size={15}/></Button>}</div>}</section><section className="waiting-list soft-card"><div className="counter-section-head"><div><div className="label">FILE ACTIVE</div><h2>En attente <span>{counter?.waiting.length??0}</span></h2></div></div>{counter?.waiting.map((t,i)=><div className="wait-row" key={t.id}><span className="wait-index">{String(i+1).padStart(2,'0')}</span><span className="wait-ticket">{t.code}</span><span className="wait-name">{t.ownerName}</span><span className="wait-time">{t.estimatedWaitMinutes} min</span></div>)}</section></div>}</>;
 }
-function TenantPage() {
+function LegacyTenantPrototype() {
  const [page,setPage]=useState('Tableau de bord');const [tenant,setTenant]=useState<Tenant>('clinic');const [queueOpen,setQueueOpen]=useState(false);const [called,setCalled]=useState(false);const [serviced,setServiced]=useState<string[]>([]);const [filter,setFilter]=useState('Tous');const [drawer,setDrawer]=useState(false);const [agentModal,setAgentModal]=useState(false);const [siteModal,setSiteModal]=useState(false);const [fileModal,setFileModal]=useState(false);const [agents,setAgents]=useState(['Youssef El Idrissi']);const [apptStatus,setApptStatus]=useState('Confirmé');
  const org=orgs.find(o=>o.id===tenant)!;
  const appts=[['09:30','Sara Benali','Dépôt de dossier',apptStatus],['10:15','Mehdi Karim','Retrait de documents','À venir'],['11:00','Lina Berrada','Dépôt de dossier','Terminé'],['11:30','Omar Tahiri','Retrait de documents','Absent']];
@@ -203,7 +203,174 @@ function Decisions() {return <main className="decisions-page landing-bg"><header
 // Pages that need a logged-in user (redirects to Keycloak otherwise).
 const protectedCache=new Map<React.ComponentType,React.ComponentType>();
 function protect(Page:React.ComponentType){let P=protectedCache.get(Page);if(!P){P=()=><RequireAuth><Page/></RequireAuth>;protectedCache.set(Page,P)}return P}
-function RouteView() {return <Switch><Route path="/" component={Landing}/><Route path="/login" component={AuthPage}/><Route path="/register" component={AuthPage}/><Route path="/home" component={protect(ClientHome)}/><Route path="/search" component={protect(SearchPage)}/><Route path="/establishment/:id">{params=><RequireAuth><Establishment id={params.id}/></RequireAuth>}</Route><Route path="/success" component={protect(Success)}/><Route path="/tickets" component={protect(TicketPage)}/><Route path="/appointments" component={protect(Appointments)}/><Route path="/profile" component={protect(ProfilePage)}/><Route path="/tenant" component={TenantPage}/><Route path="/tenant/:page">{params=><TenantNamedPage page={params.page}/>}</Route><Route path="/provider" component={ProviderLogin}/><Route path="/provider/dashboard" component={Provider}/><Route path="/provider/organisations" component={Provider}/><Route path="/provider/offres" component={Provider}/><Route path="/provider/sante" component={Provider}/><Route path="/provider/support" component={Provider}/><Route path="/provider/audit" component={Provider}/><Route path="/decisions" component={Decisions}/><Route><div className="not-found"><Brand/><h1>Cette page s'est éclipsée.</h1><Link href="/" className="btn-dark">Retour à l'accueil</Link></div></Route></Switch>}
+function LegacyRouteView() {return <Switch><Route path="/" component={Landing}/><Route path="/login" component={AuthPage}/><Route path="/register" component={AuthPage}/><Route path="/home" component={protect(ClientHome)}/><Route path="/search" component={protect(SearchPage)}/><Route path="/establishment/:id">{params=><RequireAuth><Establishment id={params.id}/></RequireAuth>}</Route><Route path="/success" component={protect(Success)}/><Route path="/tickets" component={protect(TicketPage)}/><Route path="/appointments" component={protect(Appointments)}/><Route path="/profile" component={protect(ProfilePage)}/><Route path="/tenant" component={TenantPage}/><Route path="/tenant/:page">{params=><TenantNamedPage page={params.page}/>}</Route><Route path="/provider" component={ProviderLogin}/><Route path="/provider/dashboard" component={Provider}/><Route path="/provider/organisations" component={Provider}/><Route path="/provider/offres" component={Provider}/><Route path="/provider/sante" component={Provider}/><Route path="/provider/support" component={Provider}/><Route path="/provider/audit" component={Provider}/><Route path="/decisions" component={Decisions}/><Route><div className="not-found"><Brand/><h1>Cette page s'est éclipsée.</h1><Link href="/" className="btn-dark">Retour à l'accueil</Link></div></Route></Switch>}
 function TenantNamedPage({page}:{page:string}) {const [,setLocation]=useLocation();useEffect(()=>{setLocation('/tenant')},[setLocation,page]);return <TenantPage/>}
+
+const staffNavigation = [
+  ['Tableau de bord', LayoutDashboard],
+  ['Guichet', Ticket],
+  ['Rendez-vous', CalendarDays],
+  ['Établissement', Building2],
+] as const;
+
+function StaffShell({children,page,setPage,establishments,establishmentId,setEstablishmentId}:{
+  children:React.ReactNode;
+  page:string;
+  setPage:(page:string)=>void;
+  establishments:Est[]|null;
+  establishmentId:string;
+  setEstablishmentId:(id:string)=>void;
+}) {
+  const {user,logout}=useAuth();
+  return <div className="tenant-shell">
+    <aside className="dash-sidebar">
+      <Brand/>
+      <label className="appointment-field">ÉTABLISSEMENT
+        <select aria-label="Établissement" value={establishmentId} onChange={event=>setEstablishmentId(event.target.value)} disabled={!establishments?.length}>
+          {(establishments??[]).map(item=><option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+      </label>
+      <div className="sidebar-label">ESPACE ÉQUIPE</div>
+      <nav className="tenant-links">{staffNavigation.map(([name,Icon])=><button type="button" key={name} onClick={()=>setPage(name)} className={page===name?'active':''}><Icon size={17}/>{name}</button>)}</nav>
+      <div className="sidebar-bottom">
+        <div className="agent-card"><span className="agent-avatar">{user?.initials}</span><span><b>{user?.name}</b><small>{user?.roles.includes('admin')?'Administrateur':'Agent'}</small></span><button type="button" aria-label="Se déconnecter" title="Se déconnecter" onClick={logout}><LogOut size={16}/></button></div>
+      </div>
+    </aside>
+    <main className="tenant-main">
+      <header className="tenant-topbar"><div className="crumb"><span>{establishments?.find(item=>item.id===establishmentId)?.name??'Tiko'}</span><ChevronRight size={14}/><b>{page}</b></div><div className="topbar-right"><span className="today-label">{new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'})}</span><span className="tenant-profile">{user?.initials}</span></div></header>
+      <section className="tenant-content">{children}</section>
+    </main>
+  </div>;
+}
+
+function TenantPage() {
+  const [page,setPage]=useState('Tableau de bord');
+  const [establishmentId,setEstablishmentId]=useState('');
+  const [queueId,setQueueId]=useState<number|null>(null);
+  const [counters,setCounters]=useState<Counter[]>([]);
+  const [counterLoading,setCounterLoading]=useState(true);
+  const [counterError,setCounterError]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [appointments,setAppointments]=useState<Appt[]|null>(null);
+  const [appointmentError,setAppointmentError]=useState('');
+  const [appointmentBusy,setAppointmentBusy]=useState<string|null>(null);
+  const [appointmentFilter,setAppointmentFilter]=useState('Tous');
+  const {list,error:establishmentError}=useEstablishments();
+  const establishment=list?.find(item=>item.id===establishmentId)??null;
+
+  useEffect(()=>{
+    if(list?.length&&!list.some(item=>item.id===establishmentId))setEstablishmentId(list[0].id);
+  },[list,establishmentId]);
+
+  useEffect(()=>{
+    setQueueId(establishment?.queues[0]?.id??null);
+    setCounters([]);
+    setCounterLoading(true);
+    setCounterError('');
+  },[establishmentId]);
+
+  useEffect(()=>{
+    if(!establishment)return;
+    let active=true;
+    const refresh=async()=>{
+      try{
+        const results=await Promise.all(establishment.queues.map(queue=>api.counter(queue.id)));
+        if(active){setCounters(results);setCounterError('');setCounterLoading(false)}
+      }catch(error){
+        if(active){setCounterError(errorText(error));setCounterLoading(false)}
+      }
+    };
+    void refresh();
+    const timer=window.setInterval(()=>void refresh(),page==='Guichet'?5000:30000);
+    return ()=>{active=false;window.clearInterval(timer)};
+  },[establishment?.id,page]);
+
+  useEffect(()=>{
+    if(page!=='Rendez-vous'||!establishmentId)return;
+    let active=true;
+    const refresh=async()=>{
+      try{
+        const items=await api.staffAppointments(establishmentId);
+        if(active){setAppointments(items);setAppointmentError('')}
+      }catch(error){
+        if(active)setAppointmentError(errorText(error));
+      }
+    };
+    setAppointments(null);
+    void refresh();
+    const timer=window.setInterval(()=>void refresh(),30000);
+    return ()=>{active=false;window.clearInterval(timer)};
+  },[page,establishmentId]);
+
+  const selectedCounter=counters.find(item=>item.queue.id===queueId)??null;
+  const waitingCount=counters.reduce((sum,item)=>sum+item.waiting.length,0);
+  const estimatedWait=Math.max(0,...(establishment?.queues.map(queue=>queue.estimatedWaitMinutes)??[]));
+
+  const runQueueAction=async(action:()=>Promise<Counter>)=>{
+    setBusy(true);setCounterError('');
+    try{
+      const updated=await action();
+      setCounters(current=>current.map(item=>item.queue.id===updated.queue.id?updated:item));
+    }catch(error){setCounterError(errorText(error))}
+    finally{setBusy(false)}
+  };
+
+  const runAppointmentAction=async(id:string,action:()=>Promise<Appt>)=>{
+    setAppointmentBusy(id);setAppointmentError('');
+    try{
+      await action();
+      setAppointments(await api.staffAppointments(establishmentId));
+    }catch(error){setAppointmentError(errorText(error))}
+    finally{setAppointmentBusy(null)}
+  };
+
+  const appointmentsVisible=(appointments??[]).filter(item=>
+    appointmentFilter==='Tous'||
+    (appointmentFilter==='À venir'&&item.status==='BOOKED'&&new Date(item.startsAt)>=new Date())||
+    (appointmentFilter==='Terminés'&&item.status==='COMPLETED')||
+    (appointmentFilter==='Absents'&&item.status==='NO_SHOW'));
+
+  return <StaffShell page={page} setPage={setPage} establishments={list} establishmentId={establishmentId} setEstablishmentId={setEstablishmentId}>
+    <div className="page-heading"><div><div className="label">ESPACE ÉTABLISSEMENT</div><h1>{page}</h1><p>Données actualisées depuis Tiko.</p></div>{page==='Guichet'&&<Pill>{counterLoading?'Chargement':counterError?'Hors ligne':'Actualisation automatique'}</Pill>}</div>
+    {establishmentError&&<p className="safe-note" role="alert">{establishmentError}</p>}
+    {!establishment&&list&&<div className="empty-state compact"><h2>Aucun établissement disponible</h2><p className="muted">Aucun établissement n’est configuré dans le service.</p></div>}
+    {establishment&&page==='Tableau de bord'&&<>
+      <div className="stat-grid">
+        <StatTile title="Clients en attente" value={counterLoading?'…':String(waitingCount)} sub="Toutes les files de l’établissement" icon={<Users size={18}/>}/>
+        <StatTile title="Attente estimée" value={`${estimatedWait} min`} sub="Estimation par file" icon={<Clock3 size={18}/>}/>
+        <StatTile title="Files configurées" value={String(establishment.queues.length)} sub="Files disponibles" icon={<List size={18}/>}/>
+        <StatTile title="Établissement" value={establishment.city} sub={establishment.category} icon={<MapPin size={18}/>}/>
+      </div>
+      {counterError&&<p className="safe-note" role="alert">{counterError}</p>}
+      <section className="table-card soft-card"><div className="table-caption"><span>Files de {establishment.name}</span><span>État en direct</span></div>
+        {counters.map(item=><div className="wait-row" key={item.queue.id}><span className="wait-index"><Ticket size={15}/></span><span className="wait-ticket">{item.queue.name}</span><span className="wait-name">{item.waiting.length} en attente{item.current?` · ${item.current.code} au guichet`:''}</span><button className="text-link" onClick={()=>{setQueueId(item.queue.id);setPage('Guichet')}}>Gérer <ArrowRight size={14}/></button></div>)}
+      </section>
+    </>}
+    {establishment&&page==='Guichet'&&<>
+      {counterError&&<div className="offline-alert" role="alert"><Activity size={17}/><div><b>Action impossible</b><span>{counterError}</span></div></div>}
+      <div className="counter-status soft-card"><span className="counter-light opened"/><div><b>{selectedCounter?.queue.counter??'Guichet'}</b><small>{establishment.name}</small></div><div className="counter-actions"><label className="sr-only" htmlFor="staff-queue">File</label><select id="staff-queue" aria-label="File" value={queueId??''} onChange={event=>setQueueId(Number(event.target.value)||null)}>{establishment.queues.map(queue=><option key={queue.id} value={queue.id}>{queue.name}</option>)}</select></div></div>
+      {!selectedCounter?<div className="empty-counter"><h2>{counterLoading?'Chargement de la file…':'Aucune file sélectionnée'}</h2></div>:<div className="counter-grid">
+        <section className="current-customer soft-card"><div className="counter-section-head"><div><div className="label">EN SERVICE</div><h2>Ticket actuel</h2></div><span className="live-badge"><i/> EN DIRECT</span></div>
+          {selectedCounter.current?<div className="customer-current"><div className="customer-id"><small>NUMÉRO DE TICKET</small><b>{selectedCounter.current.code}</b></div><div className="current-name"><span className="profile-avatar mini">{selectedCounter.current.ownerName.slice(0,2).toUpperCase()}</span><span><b>{selectedCounter.current.ownerName}</b><small>{selectedCounter.current.queueName}</small></span><Pill>Appelé</Pill></div><div className="action-row"><Button kind="teal" disabled={busy} onClick={()=>void runQueueAction(()=>api.served(selectedCounter.current!.id))}><Check size={16}/> Servi</Button><button className="outline-action" disabled={busy} onClick={()=>void runQueueAction(()=>api.noShow(selectedCounter.current!.id))}>Absent</button></div></div>
+          :<div className="counter-empty small-empty"><CheckCircle2 size={24}/><h3>Personne au guichet</h3><p>{selectedCounter.waiting[0]?`Le ticket ${selectedCounter.waiting[0].code} est prêt à être appelé.`:'Aucune personne en attente.'}</p>{selectedCounter.waiting.length>0&&<Button kind="teal" disabled={busy} onClick={()=>void runQueueAction(()=>api.callNext(selectedCounter.queue.id))}>Appeler {selectedCounter.waiting[0].code} <ArrowRight size={15}/></Button>}</div>}
+        </section>
+        <section className="waiting-list soft-card"><div className="counter-section-head"><div><div className="label">FILE ACTIVE</div><h2>En attente <span>{selectedCounter.waiting.length}</span></h2></div></div>{selectedCounter.waiting.map((ticket,index)=><div className="wait-row" key={ticket.id}><span className="wait-index">{String(index+1).padStart(2,'0')}</span><span className="wait-ticket">{ticket.code}</span><span className="wait-name">{ticket.ownerName}</span><span className="wait-time">{ticket.estimatedWaitMinutes} min</span></div>)}</section>
+      </div>}
+    </>}
+    {establishment&&page==='Rendez-vous'&&<>
+      <div className="filter-bar soft-card">{['Tous','À venir','Terminés','Absents'].map(filter=><button type="button" key={filter} onClick={()=>setAppointmentFilter(filter)} className={appointmentFilter===filter?'selected':''}>{filter}</button>)}</div>
+      {appointmentError&&<p className="safe-note" role="alert">{appointmentError}</p>}
+      {appointments===null&&!appointmentError?<div className="empty-state compact"><p className="muted">Chargement des rendez-vous…</p></div>:appointmentsVisible.length===0?<div className="empty-state compact"><h2>Aucun rendez-vous</h2><p className="muted">Les réservations de cet établissement apparaîtront ici.</p></div>:<div className="table-card soft-card"><div className="table-caption"><span>Rendez-vous</span><span>{establishment.name}</span></div><table><thead><tr><th>DATE</th><th>COMPTE CLIENT</th><th>MOTIF</th><th>STATUT</th><th>ACTIONS</th></tr></thead><tbody>{appointmentsVisible.map(item=><tr key={item.id}><td className="table-time">{new Date(item.startsAt).toLocaleString('fr-FR',{dateStyle:'short',timeStyle:'short'})}</td><td>Compte {item.ownerSubject.slice(0,8)}</td><td>{item.reason}</td><td><Pill tone={item.status==='BOOKED'?'green':item.status==='NO_SHOW'?'red':'gray'}>{item.status==='BOOKED'?'Confirmé':item.status==='COMPLETED'?'Terminé':item.status==='NO_SHOW'?'Absent':'Annulé'}</Pill></td><td>{item.status==='BOOKED'&&<div className="action-row"><Button kind="light" disabled={appointmentBusy===item.id} onClick={()=>void runAppointmentAction(item.id,()=>api.completeAppointment(item.id))}>Terminé</Button><button className="outline-action" disabled={appointmentBusy===item.id} onClick={()=>void runAppointmentAction(item.id,()=>api.noShowAppointment(item.id))}>Absent</button></div>}</td></tr>)}</tbody></table></div>}
+    </>}
+    {establishment&&page==='Établissement'&&<section className="detail-hero soft-card"><div className="detail-org-top"><span className="org-mark large" style={{background:establishment.tint,color:establishment.color}}>{establishment.shortName}</span><div><div className="label">{establishment.category.toUpperCase()}</div><h1>{establishment.name}</h1><p>{establishment.city}</p></div></div><div className="detail-address"><MapPin size={15}/>{establishment.address}</div><div className="detail-queue-stats"><div><small>OUVERTURE</small><b>{establishment.opensAt}–{establishment.closesAt}</b></div><div><small>FILES</small><b>{establishment.queues.length}</b></div><div><small>EN ATTENTE</small><b>{waitingCount} personne{waitingCount===1?'':'s'}</b></div></div><p className="safe-note"><ShieldCheck size={14}/> Les informations de l’établissement sont en lecture seule : aucune édition n’est disponible dans l’API.</p></section>}
+  </StaffShell>;
+}
+
+function ProviderUnavailable() {
+  return <main className="not-found"><Brand/><h1>Console fournisseur indisponible</h1><p className="muted">La gestion des organisations fournisseur n’est pas encore prise en charge par l’API Tiko.</p><Link href="/" className="btn-dark">Retour à l’accueil</Link></main>;
+}
+
+function RouteView() {return <Switch><Route path="/" component={Landing}/><Route path="/login" component={AuthPage}/><Route path="/register" component={AuthPage}/><Route path="/home" component={protect(ClientHome)}/><Route path="/search" component={protect(SearchPage)}/><Route path="/establishment/:id">{params=><RequireAuth><Establishment id={params.id}/></RequireAuth>}</Route><Route path="/success" component={protect(Success)}/><Route path="/tickets" component={protect(TicketPage)}/><Route path="/appointments" component={protect(Appointments)}/><Route path="/profile" component={protect(ProfilePage)}/><Route path="/tenant">{()=><RequireStaff><TenantPage/></RequireStaff>}</Route><Route path="/tenant/:page">{params=><RequireStaff><TenantNamedPage page={params.page}/></RequireStaff>}</Route><Route path="/provider" component={ProviderUnavailable}/><Route path="/provider/dashboard" component={ProviderUnavailable}/><Route path="/provider/organisations" component={ProviderUnavailable}/><Route path="/provider/offres" component={ProviderUnavailable}/><Route path="/provider/sante" component={ProviderUnavailable}/><Route path="/provider/support" component={ProviderUnavailable}/><Route path="/provider/audit" component={ProviderUnavailable}/><Route path="/decisions" component={Decisions}/><Route><div className="not-found"><Brand/><h1>Cette page s’est éclipsée.</h1><Link href="/" className="btn-dark">Retour à l’accueil</Link></div></Route></Switch>}
+
 function App() {return <RouteView/>}
 export default App;

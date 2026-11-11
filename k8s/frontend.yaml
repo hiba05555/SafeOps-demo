@@ -33,7 +33,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: frontend
-          image: tiko/frontend:local
+          image: tiko/frontend:mvp
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

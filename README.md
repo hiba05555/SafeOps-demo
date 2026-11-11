@@ -78,6 +78,18 @@ owner-scoped; staff-only routes require the `agent` or `admin` realm role.
 | POST | `/api/notifications/{id}/read` | Notification owner |
 | POST | `/api/notifications` | Agent / admin |
 
+## MVP workflows
+
+- Clients sign in at `/login`, find an establishment, take a queue ticket, or book a future
+  appointment. Their tickets and appointments are available from the client workspace.
+- Staff sign in with an `agent` or `admin` realm role and open `/tenant`. The workspace reads
+  live counters and establishment appointments; staff can call the next ticket, mark the current
+  ticket served or absent, and complete or mark booked appointments as no-show. The gateway and
+  each service enforce staff authorization independently of the frontend.
+- Establishment details are read-only in this MVP. Site, queue, agent, and provider-organization
+  creation/editing are not exposed because there are no corresponding management APIs. Staff roles
+  are realm-wide; per-establishment role scoping is not implemented yet.
+
 The queue, appointment, and profile-notification services use separate PostgreSQL databases.
 They currently use Hibernate `ddl-auto=update` for the MVP; use Flyway-managed migrations before
 production. Notification creation stores notifications; delivery through SMS or email is not

@@ -1,11 +1,12 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import keycloak from './keycloak';
 
 /** What any component can read with `useAuth()`. */
 type AuthContextValue = {
   ready: boolean;              // false while we are still talking to Keycloak at startup
   authenticated: boolean;      // true when the user is logged in
-  user: { name: string; email?: string; username?: string; initials: string } | null;
+  user: { name: string; email?: string; username?: string; initials: string; roles: string[] } | null;
   token?: string;              // access token, send it to your API as "Authorization: Bearer <token>"
   login: (redirectPath?: string) => void;
   register: () => void;
@@ -30,11 +31,23 @@ function initKeycloak() {
 }
 
 function readUser() {
-  const t = keycloak.tokenParsed as Record<string, string> | undefined;
+  const t = keycloak.tokenParsed as (Record<string, unknown> & {
+    realm_access?: { roles?: unknown };
+  }) | undefined;
   if (!t) return null;
-  const name = t.name || t.preferred_username || 'Utilisateur';
+  const name = typeof t.name === 'string' ? t.name :
+    typeof t.preferred_username === 'string' ? t.preferred_username : 'Utilisateur';
   const initials = name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
-  return { name, email: t.email, username: t.preferred_username, initials };
+  const roles = Array.isArray(t.realm_access?.roles)
+    ? t.realm_access.roles.filter((role): role is string => typeof role === 'string')
+    : [];
+  return {
+    name,
+    email: typeof t.email === 'string' ? t.email : undefined,
+    username: typeof t.preferred_username === 'string' ? t.preferred_username : undefined,
+    initials,
+    roles,
+  };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -91,4 +104,24 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     if (!authenticated) login(window.location.pathname + window.location.search);
   }, [authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
   return authenticated ? <>{children}</> : null;
+}
+
+export function RequireStaff({ children }: { children: ReactNode }) {
+  const { authenticated, login, user } = useAuth();
+  useEffect(() => {
+    if (!authenticated) login(window.location.pathname + window.location.search);
+  }, [authenticated]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!authenticated) return null;
+  if (!user?.roles.some(role => role === 'agent' || role === 'admin')) {
+    return (
+      <main className="empty-state">
+        <div className="empty-icon"><ShieldCheck size={25}/></div>
+        <h1>Accès réservé à l’équipe</h1>
+        <p className="muted">Un rôle agent ou admin est nécessaire pour gérer les files.</p>
+        <a href="/home" className="btn-dark">Retour à l’accueil</a>
+      </main>
+    );
+  }
+  return <>{children}</>;
 }

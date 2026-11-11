@@ -84,9 +84,15 @@ export const api = {
   served: (ticketId: string) => post<Counter>(`/tickets/${encodeURIComponent(ticketId)}/served`),
   noShow: (ticketId: string) => post<Counter>(`/tickets/${encodeURIComponent(ticketId)}/no-show`),
   appointments: () => request<Appointment[]>('/appointments/me'),
+  staffAppointments: (establishmentId: string) =>
+    request<Appointment[]>(`/appointments?establishmentId=${encodeURIComponent(establishmentId)}`),
   createAppointment: (input: Pick<Appointment, 'establishmentId' | 'queueId' | 'startsAt' | 'reason'>) =>
     post<Appointment>('/appointments', input),
   cancelAppointment: (id: string) => post<Appointment>(`/appointments/${encodeURIComponent(id)}/cancel`),
+  completeAppointment: (id: string) =>
+    post<Appointment>(`/appointments/${encodeURIComponent(id)}/complete`),
+  noShowAppointment: (id: string) =>
+    post<Appointment>(`/appointments/${encodeURIComponent(id)}/no-show`),
   preferences: () => request<Preferences>('/profile/preferences'),
   updatePreferences: (input: Omit<Preferences, 'subject'>) => put<Preferences>('/profile/preferences', input),
   notifications: () => request<Notification[]>('/notifications'),
