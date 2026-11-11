@@ -34,6 +34,22 @@ spec:
         fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        - name: prepare-data-directory
+          image: postgres:17-alpine
+          command: ["sh", "-c", "chown 70:70 /data"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
       containers:
         - name: postgres
           image: postgres:17-alpine
