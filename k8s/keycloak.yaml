@@ -48,7 +48,7 @@ spec:
       initContainers:
         - name: prepare-quarkus-cache
           image: quay.io/keycloak/keycloak:26.7.5
-          command: ["/bin/bash", "-ec", "cp -a /opt/keycloak/lib/quarkus/. /quarkus-cache/"]
+          command: ["/bin/bash", "-ec", "cp -R /opt/keycloak/lib/quarkus/. /quarkus-cache/"]
           volumeMounts:
             - name: quarkus-cache
               mountPath: /quarkus-cache
