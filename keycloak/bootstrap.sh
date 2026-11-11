@@ -20,8 +20,10 @@ REALM="${REALM:-tiko}"
 OUT_DIR="${OUT_DIR:-/bootstrap}"
 # comma separated origins the frontend is served from
 FRONTEND_ORIGINS="${FRONTEND_ORIGINS:-http://localhost:3000,http://localhost:5173}"
+POST_LOGOUT_REDIRECT_URIS="${FRONTEND_ORIGINS//,/\/\*##}"
 API_AUDIENCE="${API_AUDIENCE:-tiko-api}"
 BACKEND_CLIENT_ID="${BACKEND_CLIENT_ID:-tiko-backend}"
+BACKEND_CLIENT_SECRET="${BACKEND_CLIENT_SECRET:-}"
 # uid the gateway runs as (backend/api-gateway/Dockerfile): the only reader of the secret
 SECRET_OWNER_UID="${SECRET_OWNER_UID:-10001}"
 
@@ -135,7 +137,7 @@ cat > "$TMP/frontend.json" <<EOF
   "webOrigins": $(json_list "$FRONTEND_ORIGINS" ""),
   "attributes": {
     "pkce.code.challenge.method": "S256",
-    "post.logout.redirect.uris": "$(echo "$FRONTEND_ORIGINS" | sed 's|,|/*##|g')/*"
+    "post.logout.redirect.uris": "$POST_LOGOUT_REDIRECT_URIS/*"
   }
 }
 EOF
@@ -156,6 +158,11 @@ cat > "$TMP/backend.json" <<EOF
 }
 EOF
 ensure_client "$BACKEND_CLIENT_ID" "$TMP/backend.json"
+if [ -n "$BACKEND_CLIENT_SECRET" ]; then
+  BACKEND_UUID=$(client_uuid "$BACKEND_CLIENT_ID")
+  kc update "clients/$BACKEND_UUID" -r "$REALM" -s "secret=$BACKEND_CLIENT_SECRET"
+  log "configured the supplied secret for $BACKEND_CLIENT_ID"
+fi
 
 ensure_audience_mapper frontend
 ensure_audience_mapper "$BACKEND_CLIENT_ID"
@@ -171,6 +178,8 @@ BACKEND_UUID=$(client_uuid "$BACKEND_CLIENT_ID")
 SECRET=$(kc get "clients/$BACKEND_UUID/client-secret" -r "$REALM" \
   | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
 [ -n "$SECRET" ] || { log "could not read the $BACKEND_CLIENT_ID secret"; exit 1; }
+[ -z "$BACKEND_CLIENT_SECRET" ] || [ "$SECRET" = "$BACKEND_CLIENT_SECRET" ] \
+  || { log "the configured $BACKEND_CLIENT_ID secret did not match"; exit 1; }
 
 mkdir -p "$OUT_DIR"
 umask 077
