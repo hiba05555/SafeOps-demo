@@ -45,9 +45,28 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        - name: prepare-quarkus-cache
+          image: quay.io/keycloak/keycloak:26.7.5
+          command: ["/bin/bash", "-ec", "cp -a /opt/keycloak/lib/quarkus/. /quarkus-cache/"]
+          volumeMounts:
+            - name: quarkus-cache
+              mountPath: /quarkus-cache
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
       containers:
         - name: keycloak
-          image: quay.io/keycloak/keycloak:26.4
+          image: quay.io/keycloak/keycloak:26.7.5
           args: ["start-dev"]
           ports:
             - name: http
@@ -79,6 +98,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /opt/keycloak/data
+            - name: quarkus-cache
+              mountPath: /opt/keycloak/lib/quarkus
             - name: tmp
               mountPath: /tmp
           securityContext:
@@ -116,6 +137,8 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: keycloak-data
+        - name: quarkus-cache
+          emptyDir: {}
         - name: tmp
           emptyDir:
             medium: Memory
