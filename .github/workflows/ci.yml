@@ -85,7 +85,7 @@ jobs:
             VITE_KEYCLOAK_REALM=tiko
             VITE_KEYCLOAK_CLIENT_ID=frontend
       - name: Scan image
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.29.0
         with:
           image-ref: tiko/${{ matrix.image }}:ci
           format: table
