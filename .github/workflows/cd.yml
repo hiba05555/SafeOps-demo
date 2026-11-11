@@ -102,7 +102,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-kubectl@v5.2.0
         with:
           version: v1.32.0
       - name: Configure cluster access
