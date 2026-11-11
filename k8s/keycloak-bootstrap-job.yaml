@@ -1,0 +1,95 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-bootstrap
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: keycloak-bootstrap
+        role: identity-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: quay.io/keycloak/keycloak:26.7.5
+          command: ["/bin/bash", "/bootstrap/bootstrap.sh"]
+          env:
+            - name: KC_URL
+              value: http://keycloak:8080
+            - name: KC_ADMIN
+              valueFrom:
+                secretKeyRef:
+                  name: tiko-secrets
+                  key: KC_ADMIN
+            - name: KC_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tiko-secrets
+                  key: KC_ADMIN_PASSWORD
+            - name: BACKEND_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: tiko-secrets
+                  key: PROVIDER_CLIENT_SECRET
+            - name: FRONTEND_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: tiko-config
+                  key: FRONTEND_ORIGINS
+            - name: TIKO_CLIENT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tiko-secrets
+                  key: TIKO_CLIENT_PASSWORD
+            - name: TIKO_AGENT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tiko-secrets
+                  key: TIKO_AGENT_PASSWORD
+            - name: TIKO_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tiko-secrets
+                  key: TIKO_ADMIN_PASSWORD
+          volumeMounts:
+            - name: bootstrap
+              mountPath: /bootstrap
+            - name: script
+              mountPath: /bootstrap/bootstrap.sh
+              subPath: keycloak-bootstrap.sh
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: bootstrap
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: script
+          configMap:
+            name: keycloak-bootstrap
+            defaultMode: 0444
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi

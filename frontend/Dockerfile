@@ -15,7 +15,8 @@ ENV VITE_KEYCLOAK_URL=$VITE_KEYCLOAK_URL \
 RUN npm run build
 
 # ---- serve ----
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM nginxinc/nginx-unprivileged:alpine3.24@sha256:b5047b9b76845eac124358373c6852377c52e4b05834a47647e955dd91cb8f1e
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
+USER 101
 EXPOSE 8080

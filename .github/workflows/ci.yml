@@ -1,0 +1,200 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend / ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - api-gateway
+          - queue-service
+          - appointment-service
+          - profile-notification-service
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: backend/${{ matrix.service }}/pom.xml
+      - name: Verify
+        run: mvn -B -f backend/${{ matrix.service }}/pom.xml verify
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Scan Git history for secrets
+        run: docker run --rm --user "$(id -u):$(id -g)" -v "$GITHUB_WORKSPACE:/repo:ro" ghcr.io/gitleaks/gitleaks@sha256:a157fcc2219f2440861b7541aa125f708fedcb0f1777f390806ffab45538d422 git /repo --redact --no-banner
+
+  hadolint:
+    name: Hadolint / Dockerfiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Lint Dockerfiles
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" hadolint/hadolint@sha256:30a8fd2e785ab6176eed53f74769e04f125afb2f74a6c52aef7d463583b6d45e /bin/hadolint /repo/backend/api-gateway/Dockerfile /repo/backend/queue-service/Dockerfile /repo/backend/appointment-service/Dockerfile /repo/backend/profile-notification-service/Dockerfile /repo/frontend/Dockerfile
+
+  trivy-fs:
+    name: Trivy / filesystem
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Scan filesystem for HIGH and CRITICAL findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+
+  docker:
+    name: Docker build and Trivy / ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api-gateway
+            context: backend/api-gateway
+          - image: queue-service
+            context: backend/queue-service
+          - image: appointment-service
+            context: backend/appointment-service
+          - image: profile-notification-service
+            context: backend/profile-notification-service
+          - image: frontend
+            context: frontend
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Build without publishing
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          load: true
+          tags: tiko/${{ matrix.image }}:ci
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          build-args: |
+            VITE_KEYCLOAK_URL=http://localhost:8080
+            VITE_KEYCLOAK_REALM=tiko
+            VITE_KEYCLOAK_CLIENT_ID=frontend
+      - name: Scan image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: tiko/${{ matrix.image }}:ci
+          format: table
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+
+  kubeconform:
+    name: Validate Kubernetes manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: azure/setup-kubectl@3e0aec4d80787158d308d7b364cb1b702e7feb7f # v4.0.0
+        with:
+          version: v1.32.0
+      - name: Validate rendered Kustomize resources
+        run: kubectl kustomize k8s/ | docker run --rm -i ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary -ignore-missing-schemas
+
+  kind-smoke:
+    name: Kind deployment smoke test
+    runs-on: ubuntu-latest
+    needs:
+      - backend
+      - frontend
+      - gitleaks
+      - hadolint
+      - trivy-fs
+      - kubeconform
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: helm/kind-action@0025e74a8c7512023d06dc019c617aa3cf561fde # v1.10.0
+        with:
+          cluster_name: tiko
+          node_image: kindest/node:v1.32.0
+      - name: Build and load application images
+        run: |
+          docker build -t tiko/api-gateway:local ./backend/api-gateway
+          docker build -t tiko/queue-service:local ./backend/queue-service
+          docker build -t tiko/appointment-service:local ./backend/appointment-service
+          docker build -t tiko/profile-notification-service:local ./backend/profile-notification-service
+          docker build \
+            --build-arg VITE_KEYCLOAK_URL=http://keycloak.tiko.local \
+            --build-arg VITE_KEYCLOAK_REALM=tiko \
+            --build-arg VITE_KEYCLOAK_CLIENT_ID=frontend \
+            -t tiko/frontend:local ./frontend
+          kind load docker-image --name tiko \
+            tiko/api-gateway:local tiko/queue-service:local \
+            tiko/appointment-service:local tiko/profile-notification-service:local \
+            tiko/frontend:local
+      - name: Apply Kustomize bundle with ephemeral test credentials
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+          kubectl create secret generic tiko-secrets -n tiko \
+            --from-literal=POSTGRES_USER=tiko_admin \
+            --from-literal=POSTGRES_PASSWORD=postgres-ci-password \
+            --from-literal=QUEUE_DB_USER=tiko \
+            --from-literal=QUEUE_DB_PASSWORD=queue-ci-password \
+            --from-literal=APPOINTMENTS_DB_USER=appointments \
+            --from-literal=APPOINTMENTS_DB_PASSWORD=appointments-ci-password \
+            --from-literal=PROFILES_DB_USER=profile_notifications \
+            --from-literal=PROFILES_DB_PASSWORD=profiles-ci-password \
+            --from-literal=KC_ADMIN=admin \
+            --from-literal=KC_ADMIN_PASSWORD=keycloak-ci-password \
+            --from-literal=TIKO_CLIENT_PASSWORD=client-ci-password \
+            --from-literal=TIKO_AGENT_PASSWORD=agent-ci-password \
+            --from-literal=TIKO_ADMIN_PASSWORD=admin-ci-password \
+            --from-literal=PROVIDER_CLIENT_ID=tiko-backend \
+            --from-literal=PROVIDER_CLIENT_SECRET=gw-ci-client-secret
+          sed -i '/  - secret.yaml/d' k8s/kustomization.yaml
+          kubectl apply -k k8s/
+      - name: Wait for bootstrap and workloads
+        run: |
+          kubectl wait --for=condition=ready pod -l app=postgres -n tiko --timeout=5m
+          kubectl wait --for=condition=ready pod -l app=keycloak -n tiko --timeout=5m
+          kubectl wait --for=condition=complete job/keycloak-bootstrap -n tiko --timeout=5m
+          kubectl wait --for=condition=available deployment --all -n tiko --timeout=8m
+          kubectl get pods,services,ingress -n tiko

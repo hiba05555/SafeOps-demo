@@ -1,0 +1,18 @@
+# Optional loopback-only ports for local service/database debugging.
+# Use: docker compose -f docker-compose.yml -f docker-compose.debug.yml up --build
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${POSTGRES_DEBUG_PORT}:5432"
+
+  queue-service:
+    ports:
+      - "127.0.0.1:${QUEUE_SERVICE_DEBUG_PORT}:8081"
+
+  appointment-service:
+    ports:
+      - "127.0.0.1:${APPOINTMENT_SERVICE_DEBUG_PORT}:8082"
+
+  profile-notification-service:
+    ports:
+      - "127.0.0.1:${PROFILE_SERVICE_DEBUG_PORT}:8083"

@@ -1,32 +1,35 @@
-# Tiko MVP:  docker compose up --build   ->  http://localhost:3000
-#
-#   keycloak       identity provider (dev mode, state kept in a volume)
-#   keycloak-init  one-shot: realm, clients, roles, users; writes the gateway's client secret
-#   postgres       queue-service database
-#   queue-service  establishments / queues / tickets (no published port: gateway only)
-#   api-gateway    verifies the JWT, forwards /api/** with X-Auth-* identity headers
-#   frontend       React build behind nginx, /api proxied to the gateway
+# Tiko development stack. Copy .env.example to .env and replace all credential placeholders.
+# Internal databases and backend services are never published to the host by default.
 
 name: tiko
 
 services:
   keycloak:
-    image: quay.io/keycloak/keycloak:26.4
+    image: quay.io/keycloak/keycloak:26.7.5
     command: start-dev
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
-      # one public issuer for every caller: the browser (localhost) and the containers
-      # (keycloak:8080) all get tokens with iss=http://localhost:${KEYCLOAK_PORT}/realms/tiko
       KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT}
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
       KC_HEALTH_ENABLED: "true"
     ports:
-      - "${KEYCLOAK_PORT}:8080"
+      - "127.0.0.1:${KEYCLOAK_PORT}:8080"
     volumes:
       - keycloak-data:/opt/keycloak/data
+      - keycloak-quarkus-cache:/opt/keycloak/lib/quarkus
+    tmpfs:
+      - /tmp
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 1.0
+    restart: unless-stopped
+    networks:
+      - edge
+      - backend
     healthcheck:
-      # the image has no curl: plain bash over /dev/tcp to the management port
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && grep -q UP <&3"]
       interval: 5s
       timeout: 5s
@@ -34,21 +37,30 @@ services:
       start_period: 20s
 
   keycloak-init:
-    image: quay.io/keycloak/keycloak:26.4
+    image: quay.io/keycloak/keycloak:26.7.5
     entrypoint: ["/bin/bash", "/bootstrap.sh"]
-    # root only to chown the secret file to the gateway's uid on the shared volume
+    # Root is required only to set the gateway-owned secret file on the named volume.
     user: "0:0"
     environment:
       KC_URL: http://keycloak:8080
       KC_ADMIN: ${KC_ADMIN}
       KC_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
-      FRONTEND_ORIGINS: http://localhost:${FRONTEND_PORT},http://localhost:5173
+      FRONTEND_ORIGINS: "http://localhost:${FRONTEND_PORT},http://localhost:${FRONTEND_DEV_PORT}"
       TIKO_CLIENT_PASSWORD: ${TIKO_CLIENT_PASSWORD}
       TIKO_AGENT_PASSWORD: ${TIKO_AGENT_PASSWORD}
       TIKO_ADMIN_PASSWORD: ${TIKO_ADMIN_PASSWORD}
     volumes:
       - ./keycloak/bootstrap.sh:/bootstrap.sh:ro
       - gateway-secrets:/bootstrap
+    tmpfs:
+      - /tmp
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - backend
     depends_on:
       keycloak:
         condition: service_healthy
@@ -57,23 +69,96 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_DB: tiko
-      POSTGRES_USER: tiko
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_BOOTSTRAP_DB}
+      POSTGRES_USER: ${POSTGRES_SUPERUSER}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      QUEUE_DB_NAME: ${QUEUE_DB_NAME}
+      QUEUE_DB_USER: ${QUEUE_DB_USER}
+      QUEUE_DB_PASSWORD: ${QUEUE_DB_PASSWORD}
+      APPOINTMENTS_DB_NAME: ${APPOINTMENTS_DB_NAME}
+      APPOINTMENTS_DB_USER: ${APPOINTMENTS_DB_USER}
+      APPOINTMENTS_DB_PASSWORD: ${APPOINTMENTS_DB_PASSWORD}
+      PROFILES_DB_NAME: ${PROFILES_DB_NAME}
+      PROFILES_DB_USER: ${PROFILES_DB_USER}
+      PROFILES_DB_PASSWORD: ${PROFILES_DB_PASSWORD}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./db/init.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 1.0
+    restart: unless-stopped
+    networks:
+      - backend
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tiko -d tiko"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 3s
       retries: 20
+      start_period: 10s
 
   queue-service:
     build: ./backend/queue-service
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/tiko
-      SPRING_DATASOURCE_USERNAME: tiko
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/${QUEUE_DB_NAME}"
+      SPRING_DATASOURCE_USERNAME: ${QUEUE_DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${QUEUE_DB_PASSWORD}
+    tmpfs:
+      - /tmp
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 0.75
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  appointment-service:
+    build: ./backend/appointment-service
+    environment:
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/${APPOINTMENTS_DB_NAME}"
+      SPRING_DATASOURCE_USERNAME: ${APPOINTMENTS_DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${APPOINTMENTS_DB_PASSWORD}
+    tmpfs:
+      - /tmp
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 0.75
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  profile-notification-service:
+    build: ./backend/profile-notification-service
+    environment:
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/${PROFILES_DB_NAME}"
+      SPRING_DATASOURCE_USERNAME: ${PROFILES_DB_USER}
+      SPRING_DATASOURCE_PASSWORD: ${PROFILES_DB_PASSWORD}
+    tmpfs:
+      - /tmp
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 0.75
+    restart: unless-stopped
+    networks:
+      - backend
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,16 +170,32 @@ services:
       PROVIDER_JWT_ISSUER: http://localhost:${KEYCLOAK_PORT}/realms/tiko
       PROVIDER_SELF_TEST: "true"
       QUEUE_SERVICE_URL: http://queue-service:8081
-      # client id + secret written by keycloak-init
+      APPOINTMENT_SERVICE_URL: http://appointment-service:8082
+      PROFILE_SERVICE_URL: http://profile-notification-service:8083
       SPRING_CONFIG_IMPORT: optional:file:/bootstrap/gateway.properties
     volumes:
       - gateway-secrets:/bootstrap:ro
     ports:
-      - "${GATEWAY_PORT}:8888"
+      - "127.0.0.1:${GATEWAY_PORT}:8888"
+    tmpfs:
+      - /tmp
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    cpus: 0.75
+    restart: unless-stopped
+    networks:
+      - edge
+      - backend
     depends_on:
       keycloak-init:
         condition: service_completed_successfully
       queue-service:
+        condition: service_healthy
+      appointment-service:
+        condition: service_healthy
+      profile-notification-service:
         condition: service_healthy
 
   frontend:
@@ -105,12 +206,36 @@ services:
         VITE_KEYCLOAK_REALM: tiko
         VITE_KEYCLOAK_CLIENT_ID: frontend
     ports:
-      - "${FRONTEND_PORT}:8080"
+      - "127.0.0.1:${FRONTEND_PORT}:8080"
+    tmpfs:
+      - /tmp
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.5
+    restart: unless-stopped
+    networks:
+      - edge
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     depends_on:
       api-gateway:
         condition: service_healthy
 
 volumes:
   keycloak-data:
+  keycloak-quarkus-cache:
   postgres-data:
   gateway-secrets:
+
+networks:
+  edge:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true

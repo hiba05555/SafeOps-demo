@@ -1,0 +1,234 @@
+stages:
+  - test
+  - build
+  - scan
+  - deploy
+
+variables:
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_DRIVER: overlay2
+  BUILDKIT_PROGRESS: plain
+
+.docker-job:
+  image: docker:27-cli
+  services:
+    - name: docker:27-dind
+      alias: docker
+  before_script:
+    - docker info
+
+backend-test:
+  stage: test
+  image: maven:3.9-eclipse-temurin-21
+  parallel:
+    matrix:
+      - SERVICE:
+          - api-gateway
+          - queue-service
+          - appointment-service
+          - profile-notification-service
+  cache:
+    key: "maven-$CI_COMMIT_REF_SLUG"
+    paths:
+      - .m2/repository/
+  variables:
+    MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+  script:
+    - mvn -B -f "backend/$SERVICE/pom.xml" verify
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+frontend-test:
+  stage: test
+  image: node:22-alpine
+  cache:
+    key: "npm-$CI_COMMIT_REF_SLUG"
+    paths:
+      - frontend/node_modules/
+  script:
+    - cd frontend
+    - npm ci
+    - npm run typecheck
+    - npm run build
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+container-build:
+  extends: .docker-job
+  stage: build
+  parallel:
+    matrix:
+      - SERVICE: [api-gateway, queue-service, appointment-service, profile-notification-service, frontend]
+  cache:
+    key: "buildx-$CI_COMMIT_REF_SLUG-$SERVICE"
+    paths:
+      - .buildx-cache/
+  script:
+    - |
+      case "$SERVICE" in
+        api-gateway|queue-service|appointment-service|profile-notification-service) CONTEXT="backend/$SERVICE" ;;
+        frontend) CONTEXT="frontend" ;;
+        *) echo "Unsupported service $SERVICE"; exit 1 ;;
+      esac
+      docker buildx create --use
+      mkdir -p .buildx-cache
+      rm -rf ".buildx-cache/$SERVICE-new"
+      CACHE_ARGS=()
+      if [ -d ".buildx-cache/$SERVICE" ]; then
+        CACHE_ARGS+=(--cache-from "type=local,src=.buildx-cache/$SERVICE")
+      fi
+      BUILD_ARGS=()
+      if [ "$SERVICE" = "frontend" ]; then
+        BUILD_ARGS+=(--build-arg "VITE_KEYCLOAK_URL=${VITE_KEYCLOAK_URL:-http://localhost:8080}"
+          --build-arg VITE_KEYCLOAK_REALM=tiko --build-arg VITE_KEYCLOAK_CLIENT_ID=frontend)
+      fi
+      if [ "$CI_COMMIT_BRANCH" = "develop" ] || [ "$CI_COMMIT_BRANCH" = "main" ]; then
+        echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
+        TAG="$CI_REGISTRY_IMAGE/$SERVICE:$CI_COMMIT_SHA"
+        TAG_ARGS=(-t "$TAG")
+        if [ "$CI_COMMIT_BRANCH" = "develop" ]; then
+          TAG_ARGS+=(-t "$CI_REGISTRY_IMAGE/$SERVICE:dev-$CI_COMMIT_SHA")
+        else
+          TAG_ARGS+=(-t "$CI_REGISTRY_IMAGE/$SERVICE:latest")
+        fi
+        docker buildx build "${BUILD_ARGS[@]}" "${CACHE_ARGS[@]}" \
+          --cache-to "type=local,dest=.buildx-cache/$SERVICE-new,mode=max" \
+          --push "${TAG_ARGS[@]}" "$CONTEXT"
+      else
+        docker buildx build "${BUILD_ARGS[@]}" "${CACHE_ARGS[@]}" \
+          --cache-to "type=local,dest=.buildx-cache/$SERVICE-new,mode=max" \
+          --load -t "$SERVICE:ci" "$CONTEXT"
+      fi
+      rm -rf ".buildx-cache/$SERVICE"
+      if [ -d ".buildx-cache/$SERVICE-new" ]; then mv ".buildx-cache/$SERVICE-new" ".buildx-cache/$SERVICE"; fi
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+container-scan:
+  extends: .docker-job
+  stage: scan
+  parallel:
+    matrix:
+      - SERVICE: [api-gateway, queue-service, appointment-service, profile-notification-service, frontend]
+  script:
+    - |
+      case "$SERVICE" in
+        api-gateway|queue-service|appointment-service|profile-notification-service) CONTEXT="backend/$SERVICE" ;;
+        frontend) CONTEXT="frontend" ;;
+        *) echo "Unsupported service $SERVICE"; exit 1 ;;
+      esac
+      if [ "$SERVICE" = "frontend" ]; then
+        docker build --build-arg "VITE_KEYCLOAK_URL=${VITE_KEYCLOAK_URL:-http://localhost:8080}" \
+          --build-arg VITE_KEYCLOAK_REALM=tiko --build-arg VITE_KEYCLOAK_CLIENT_ID=frontend \
+          -t "$SERVICE:scan" "$CONTEXT"
+      else
+        docker build -t "$SERVICE:scan" "$CONTEXT"
+      fi
+      docker save "$SERVICE:scan" -o image.tar
+      docker run --rm -v "$CI_PROJECT_DIR/image.tar:/tmp/image.tar:ro" \
+        aquasec/trivy:0.57.1 image --input /tmp/image.tar --exit-code 1 --ignore-unfixed \
+        --severity CRITICAL,HIGH --vuln-type os,library
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+kubeconform:
+  extends: .docker-job
+  stage: scan
+  script:
+    - apk add --no-cache curl
+    - kubectl version --client >/dev/null 2>&1 || (
+        curl -fsSLo /usr/local/bin/kubectl
+        "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        && chmod +x /usr/local/bin/kubectl
+      )
+    - kubectl kustomize k8s/ | docker run --rm -i ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary -ignore-missing-schemas
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+kind-smoke:
+  extends: .docker-job
+  stage: scan
+  script:
+    - apk add --no-cache bash curl
+    - |
+      KUBECTL_VERSION="v1.32.0"
+      curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+      chmod +x /usr/local/bin/kubectl
+      KIND_VERSION="v0.27.0"
+      curl -fsSLo /usr/local/bin/kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+      chmod +x /usr/local/bin/kind
+      kind create cluster --name tiko --image kindest/node:v1.32.0 --wait 180s
+      for SERVICE in api-gateway queue-service appointment-service profile-notification-service frontend; do
+        case "$SERVICE" in
+          api-gateway|queue-service|appointment-service|profile-notification-service) CONTEXT="backend/$SERVICE" ;;
+          frontend) CONTEXT="frontend" ;;
+        esac
+        if [ "$SERVICE" = "frontend" ]; then
+          docker build --build-arg VITE_KEYCLOAK_URL=http://keycloak.tiko.local \
+            --build-arg VITE_KEYCLOAK_REALM=tiko --build-arg VITE_KEYCLOAK_CLIENT_ID=frontend \
+            -t "tiko/$SERVICE:local" "$CONTEXT"
+        else
+          docker build -t "tiko/$SERVICE:local" "$CONTEXT"
+        fi
+        kind load docker-image --name tiko "tiko/$SERVICE:local"
+      done
+      kubectl apply -f k8s/namespace.yaml
+      kubectl create secret generic tiko-secrets -n tiko \
+        --from-literal=POSTGRES_USER=tiko_admin \
+        --from-literal=POSTGRES_PASSWORD=postgres-ci-password \
+        --from-literal=QUEUE_DB_USER=tiko --from-literal=QUEUE_DB_PASSWORD=queue-ci-password \
+        --from-literal=APPOINTMENTS_DB_USER=appointments --from-literal=APPOINTMENTS_DB_PASSWORD=appointments-ci-password \
+        --from-literal=PROFILES_DB_USER=profile_notifications --from-literal=PROFILES_DB_PASSWORD=profiles-ci-password \
+        --from-literal=KC_ADMIN=admin --from-literal=KC_ADMIN_PASSWORD=keycloak-ci-password \
+        --from-literal=TIKO_CLIENT_PASSWORD=client-ci-password --from-literal=TIKO_AGENT_PASSWORD=agent-ci-password \
+        --from-literal=TIKO_ADMIN_PASSWORD=admin-ci-password --from-literal=PROVIDER_CLIENT_ID=tiko-backend \
+        --from-literal=PROVIDER_CLIENT_SECRET=gw-ci-client-secret
+      sed -i '/  - secret.yaml/d' k8s/kustomization.yaml
+      kubectl apply -k k8s/
+      kubectl wait --for=condition=ready pod -l app=postgres -n tiko --timeout=5m
+      kubectl wait --for=condition=ready pod -l app=keycloak -n tiko --timeout=5m
+      kubectl wait --for=condition=complete job/keycloak-bootstrap -n tiko --timeout=5m
+      kubectl wait --for=condition=available deployment --all -n tiko --timeout=8m
+      kubectl get pods,services -n tiko
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+deploy-production:
+  stage: deploy
+  image: bitnami/kubectl:1.32
+  needs:
+    - container-build
+    - container-scan
+    - kubeconform
+    - kind-smoke
+  environment:
+    name: production
+  resource_group: production
+  script:
+    - test -n "$KUBECONFIG" || (echo "Configure KUBECONFIG as a protected GitLab file variable"; exit 1)
+    - kubectl config current-context
+    - |
+      kubectl create secret docker-registry registry-pull -n tiko \
+        --docker-server="$CI_REGISTRY" \
+        --docker-username="$REGISTRY_PULL_USER" \
+        --docker-password="$REGISTRY_PULL_TOKEN" \
+        --dry-run=client -o yaml | kubectl apply -f -
+      for deployment in api-gateway queue-service appointment-service profile-notification-service frontend; do
+        kubectl patch deployment "$deployment" -n tiko --type=merge \
+          -p '{"spec":{"template":{"spec":{"imagePullSecrets":[{"name":"registry-pull"}]}}}}'
+        kubectl set image "deployment/$deployment" -n tiko \
+          "$deployment=$CI_REGISTRY_IMAGE/$deployment:$CI_COMMIT_SHA"
+        kubectl rollout status "deployment/$deployment" -n tiko --timeout=8m
+      done
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: false
+    - when: never

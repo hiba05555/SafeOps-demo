@@ -1,0 +1,142 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cd-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish / ${{ matrix.image }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      contains(fromJSON('["main","develop"]'), github.event.workflow_run.head_branch))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: api-gateway
+            context: backend/api-gateway
+          - image: queue-service
+            context: backend/queue-service
+          - image: appointment-service
+            context: backend/appointment-service
+          - image: profile-notification-service
+            context: backend/profile-notification-service
+          - image: frontend
+            context: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare image tags
+        id: tags
+        env:
+          IMAGE_NAME: ${{ matrix.image }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          REF: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          OWNER_REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          repository="${OWNER_REPOSITORY,,}"
+          image="ghcr.io/${repository}/${IMAGE_NAME}"
+          {
+            echo "image=${image}"
+            echo "tags<<EOF"
+            echo "${image}:${SHA}"
+            if [[ "$REF" == "refs/heads/main" ]]; then
+              echo "${image}:latest"
+            elif [[ "$REF" == "refs/heads/develop" ]]; then
+              echo "${image}:dev-${SHA}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build and publish
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          build-args: |
+            VITE_KEYCLOAK_URL=${{ vars.VITE_KEYCLOAK_URL || 'http://localhost:8080' }}
+            VITE_KEYCLOAK_REALM=tiko
+            VITE_KEYCLOAK_CLIENT_ID=frontend
+
+  deploy:
+    name: Deploy production
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main')
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+      - name: Configure cluster access
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+        run: |
+          test -n "$KUBECONFIG_B64" || { echo "Set KUBECONFIG_B64 in the production Environment."; exit 1; }
+          mkdir -p "$HOME/.kube"
+          echo "$KUBECONFIG_B64" | base64 --decode > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+      - name: Configure GHCR pull access
+        env:
+          GHCR_PULL_USERNAME: ${{ secrets.GHCR_PULL_USERNAME }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          test -n "$GHCR_PULL_USERNAME" -a -n "$GHCR_PULL_TOKEN" || {
+            echo "Set GHCR_PULL_USERNAME and GHCR_PULL_TOKEN in the production Environment."
+            exit 1
+          }
+          kubectl create secret docker-registry registry-pull -n tiko \
+            --docker-server=ghcr.io \
+            --docker-username="$GHCR_PULL_USERNAME" \
+            --docker-password="$GHCR_PULL_TOKEN" \
+            --dry-run=client -o yaml | kubectl apply -f -
+      - name: Roll out SHA-tagged images
+        env:
+          IMAGE_REPOSITORY: ghcr.io/${{ github.repository }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          image_uri="$(echo "$IMAGE_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          for deployment in api-gateway queue-service appointment-service profile-notification-service frontend; do
+            kubectl patch deployment "$deployment" -n tiko --type=merge \
+              -p '{"spec":{"template":{"spec":{"imagePullSecrets":[{"name":"registry-pull"}]}}}}'
+            kubectl set image "deployment/$deployment" -n tiko \
+              "$deployment=$image_uri/$deployment:$IMAGE_TAG"
+            kubectl rollout status "deployment/$deployment" -n tiko --timeout=8m
+          done

@@ -1,0 +1,50 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: maven
+    directory: /backend/api-gateway
+    schedule:
+      interval: weekly
+  - package-ecosystem: maven
+    directory: /backend/queue-service
+    schedule:
+      interval: weekly
+  - package-ecosystem: maven
+    directory: /backend/appointment-service
+    schedule:
+      interval: weekly
+  - package-ecosystem: maven
+    directory: /backend/profile-notification-service
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /backend/api-gateway
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /backend/queue-service
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /backend/appointment-service
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /backend/profile-notification-service
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
