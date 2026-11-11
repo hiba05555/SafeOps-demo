@@ -17,6 +17,7 @@ services:
       - "127.0.0.1:${KEYCLOAK_PORT}:8080"
     volumes:
       - keycloak-data:/opt/keycloak/data
+      - keycloak-quarkus-cache:/opt/keycloak/lib/quarkus
     tmpfs:
       - /tmp
     read_only: true
@@ -228,6 +229,7 @@ services:
 
 volumes:
   keycloak-data:
+  keycloak-quarkus-cache:
   postgres-data:
   gateway-secrets:
 
