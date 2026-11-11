@@ -5,7 +5,7 @@ name: tiko
 
 services:
   keycloak:
-    image: quay.io/keycloak/keycloak:26.4
+    image: quay.io/keycloak/keycloak:26.7.5
     command: start-dev
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN}
@@ -36,7 +36,7 @@ services:
       start_period: 20s
 
   keycloak-init:
-    image: quay.io/keycloak/keycloak:26.4
+    image: quay.io/keycloak/keycloak:26.7.5
     entrypoint: ["/bin/bash", "/bootstrap.sh"]
     # Root is required only to set the gateway-owned secret file on the named volume.
     user: "0:0"
