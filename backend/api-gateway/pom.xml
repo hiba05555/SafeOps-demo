@@ -34,7 +34,7 @@
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-web</artifactId>
-            <version>7.1.0-M2</version>
+            <version>7.1.0-RC2</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
